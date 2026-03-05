@@ -1,0 +1,450 @@
+# `homeboy project`
+
+## Synopsis
+
+```sh
+homeboy project [OPTIONS] <COMMAND>
+```
+
+## Common Workflows
+
+### Linking Components to a Project
+
+After creating components, link them to a project:
+
+```sh
+# Add components to existing project
+homeboy project components add my-project component-1 component-2
+
+# Or set all components at once (replaces existing)
+homeboy project components set my-project component-1 component-2
+```
+
+Components must exist (created via `homeboy component create`) before linking.
+
+## Subcommands
+
+### `list`
+
+```sh
+homeboy project list
+```
+
+### `show`
+
+```sh
+homeboy project show <project_id>
+```
+
+Arguments:
+
+- `<project_id>`: project ID
+
+### `create`
+
+```sh
+homeboy project create [OPTIONS] [<id>] [<domain>]
+```
+
+`create` supports two modes:
+
+- **CLI mode**: pass `[<id>] [<domain>]` as positional arguments.
+- **JSON mode**: pass `--json <spec>` (CLI mode arguments are not required).
+
+Options:
+
+- `--json <spec>`: JSON input spec for create/update (single object or bulk; see below)
+- `--skip-existing`: skip items that already exist (JSON mode only)
+- `--server-id <server_id>`: optional server ID
+- `--base-path <path>`: optional base path (local or remote depending on server configuration)
+- `--table-prefix <prefix>`: optional table prefix (only used by extensions that care about table naming)
+
+Arguments (CLI mode):
+
+- `[<id>]`: project ID
+- `[<domain>]`: public site domain
+
+JSON mode:
+
+- `<spec>` accepts `-` (stdin), `@file.json`, or an inline JSON string.
+- The payload is the project object (single or array for bulk).
+
+Single:
+
+```json
+{ "id": "my-project", "domain": "example.com" }
+```
+
+Bulk:
+
+```json
+[
+  { "id": "my-project", "domain": "example.com" },
+  { "id": "my-project-2", "domain": "example.com" }
+]
+```
+
+JSON output:
+
+> Note: all command output is wrapped in the global JSON envelope described in the [JSON output contract](../architecture/output-system.md). The object below is the `data` payload.
+
+CLI mode:
+
+```json
+{
+  "command": "project.create",
+  "project_id": "<project_id>",
+  "project": { }
+}
+```
+
+JSON mode:
+
+```json
+{
+  "command": "project.create",
+  "import": {
+    "results": [{ "id": "<project_id>", "action": "created|updated|skipped|error" }],
+    "created": 1,
+    "updated": 0,
+    "skipped": 0,
+    "errors": 0
+  }
+}
+```
+
+## Local Projects
+
+Projects without a `--server-id` execute commands locally instead of via SSH. Homeboy is environment-agnostic - it works the same way regardless of whether your local environment uses Docker, native installs, or any other setup.
+
+
+### Creating a Local Project
+
+```sh
+homeboy project create <id> <domain> --base-path <local-path>
+```
+
+Example:
+
+```sh
+homeboy project create my-site my-site.local \
+    --base-path "/path/to/site/public"
+```
+
+### What Works Locally
+
+All commands execute locally when no `server_id` is configured:
+
+- **CLI tools** (`homeboy wp`, `homeboy composer`) - execute in local shell
+- **Database** (`homeboy db`) - uses extension templates, executes locally
+- **Logs** (`homeboy logs`) - reads files from `base_path`
+- **Files** (`homeboy file`) - browses/edits files at `base_path`
+- **Extension platform behaviors** - project discovery, version patterns, etc.
+
+### What Requires a Server
+
+Only these commands require `server_id`:
+- `homeboy deploy` - uploads artifacts to remote server
+- `homeboy db tunnel` - creates SSH tunnel for database access
+
+## Subcommands (continued)
+
+### `set`
+
+```sh
+homeboy project set <project_id> --json <JSON>
+homeboy project set <project_id> '<JSON>'
+homeboy project set --json <JSON>   # project_id may be provided in JSON body
+```
+
+Updates a project by merging a JSON object into `projects/<id>.json`.
+
+Options:
+
+- `--json <JSON>`: JSON object to merge into config (supports `@file` and `-` for stdin)
+- `--replace <field>`: replace array fields instead of union (repeatable)
+
+Notes:
+
+- `set` no longer supports individual field flags; use `--json` and provide the fields you want to update.
+- Use `null` in JSON to clear a field (for example, `{"component_ids": null}`).
+
+JSON output:
+
+> Note: all command output is wrapped in the global JSON envelope described in the [JSON output contract](../architecture/output-system.md). The object below is the `data` payload.
+
+```json
+{
+  "command": "project.set",
+  "project_id": "<project_id>",
+  "project": { },
+  "updated": ["domain", "server_id"],
+  "import": null
+}
+```
+
+JSON output (`list`):
+
+> Note: all command output is wrapped in the global JSON envelope described in the [JSON output contract](../architecture/output-system.md). The object below is the `data` payload.
+
+```json
+{
+  "command": "project.list",
+  "projects": [
+    {
+      "id": "<project_id>",
+      "domain": "<domain>"
+    }
+  ]
+}
+```
+
+JSON output (`show`):
+
+> Note: all command output is wrapped in the global JSON envelope described in the [JSON output contract](../architecture/output-system.md). The object below is the `data` payload.
+
+```json
+{
+  "command": "project.show",
+  "project_id": "<project_id>",
+  "project": { },
+  "import": null
+}
+```
+
+`project` is the serialized `ProjectRecord` (`{ id, config }`).
+
+### `components`
+
+```sh
+homeboy project components <COMMAND>
+```
+
+Manage the list of components associated with a project.
+
+#### `components list`
+
+```sh
+homeboy project components list <project_id>
+```
+
+Lists component IDs and the resolved component configs.
+
+JSON output:
+
+```json
+{
+  "command": "project.components.list",
+  "project_id": "<project_id>",
+  "components": {
+    "action": "list",
+    "project_id": "<project_id>",
+    "component_ids": ["<component_id>", "<component_id>"],
+    "components": [ { } ]
+  }
+}
+```
+
+#### `components add`
+
+```sh
+homeboy project components add <project_id> <component_id> [<component_id>...]
+```
+
+Adds components to the project if they are not already present.
+
+#### `components remove`
+
+```sh
+homeboy project components remove <project_id> <component_id> [<component_id>...]
+```
+
+Removes components from the project. Errors if any provided component ID is not currently attached.
+
+#### `components clear`
+
+```sh
+homeboy project components clear <project_id>
+```
+
+Removes all components from the project.
+
+#### `components set`
+
+```sh
+homeboy project components set <project_id> <component_id> [<component_id>...]
+```
+
+Replaces the full `component_ids` list on the project (deduped, order-preserving). Component IDs must exist in `homeboy component list`.
+
+You can also do this via `project set` by merging `component_ids`:
+
+```sh
+homeboy project set <project_id> --json '{"component_ids":["chubes-theme","chubes-blocks"]}'
+```
+
+Example:
+
+```sh
+homeboy project components set chubes chubes-theme chubes-blocks chubes-contact chubes-docs chubes-games
+```
+
+JSON output:
+
+```json
+{
+  "command": "project.components.set",
+  "project_id": "<project_id>",
+  "components": {
+    "action": "set",
+    "project_id": "<project_id>",
+    "component_ids": ["<component_id>", "<component_id>"],
+    "components": [ { } ]
+  },
+  "updated": ["component_ids"]
+}
+```
+
+### `pin`
+
+```sh
+homeboy project pin <COMMAND>
+```
+
+#### `pin list`
+
+```sh
+homeboy project pin list <project_id> --type <file|log>
+```
+
+JSON output:
+
+```json
+{
+  "command": "project.pin.list",
+  "project_id": "<project_id>",
+  "pin": {
+    "action": "list",
+    "project_id": "<project_id>",
+    "type": "file|log",
+    "items": [
+      {
+        "path": "<path>",
+        "label": "<label>|null",
+        "display_name": "<display-name>",
+        "tail_lines": 100
+      }
+    ]
+  }
+}
+```
+
+#### `pin add`
+
+```sh
+homeboy project pin add <project_id> <path> --type <file|log> [--label <label>] [--tail <lines>]
+```
+
+JSON output:
+
+```json
+{
+  "command": "project.pin.add",
+  "project_id": "<project_id>",
+  "pin": {
+    "action": "add",
+    "project_id": "<project_id>",
+    "type": "file|log",
+    "added": { "path": "<path>", "type": "file|log" }
+  }
+}
+```
+
+#### `pin remove`
+
+```sh
+homeboy project pin remove <project_id> <path> --type <file|log>
+```
+
+JSON output:
+
+```json
+{
+  "command": "project.pin.remove",
+  "project_id": "<project_id>",
+  "pin": {
+    "action": "remove",
+    "project_id": "<project_id>",
+    "type": "file|log",
+    "removed": { "path": "<path>", "type": "file|log" }
+  }
+}
+```
+
+### `rename`
+
+```sh
+homeboy project rename <project_id> <new_id>
+```
+
+Renames a project by changing its ID.
+
+Notes:
+
+- `new_id` is lowercased before writing.
+- The project is moved from `projects/<old-id>.json` to `projects/<new-id>.json`.
+- Component references are updated automatically.
+
+Example:
+
+```sh
+homeboy project rename my-project my-new-project
+```
+
+JSON output:
+
+```json
+{
+  "command": "project.rename",
+  "project_id": "<project_id>",
+  "new_id": "<new_id>",
+  "renamed": true
+}
+```
+
+### `remove`
+
+```sh
+homeboy project remove <project_id> --json '<JSON>'
+homeboy project remove <project_id> '<JSON>'
+```
+
+Removes items from project configuration arrays.
+
+Options:
+
+- `--json <JSON>`: JSON object to remove from config (supports `@file` and `-` for stdin)
+
+Note: Use this to remove specific fields or array items from project configuration.
+
+Example:
+
+```sh
+# Remove a component
+homeboy project remove my-project --json '{"component_ids": ["component-id"]}'
+```
+
+JSON output:
+
+```json
+{
+  "command": "project.remove",
+  "project_id": "<project_id>",
+  "removed": ["component_ids"],
+  "project": {}
+}
+```
+
+## Related
+
+- [JSON output contract](../architecture/output-system.md)

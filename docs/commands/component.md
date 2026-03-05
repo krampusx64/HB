@@ -1,0 +1,235 @@
+# `homeboy component`
+
+Manage standalone component configurations stored under `components/<id>.json`.
+
+## Synopsis
+
+```sh
+homeboy component [OPTIONS] <COMMAND>
+```
+
+
+## Subcommands
+
+### `create`
+
+```sh
+homeboy component create [OPTIONS] --local-path <path> --remote-path <path> --build-artifact <path>
+homeboy component create --from-repo <path> [--remote-path <path>]
+```
+
+The component ID is derived from the `--local-path` (or `--from-repo`) directory name (lowercased). For example, `--local-path /path/to/extrachill-api` creates a component with ID `extrachill-api`.
+
+Options:
+
+- `--from-repo <path>`: create from a repo containing `homeboy.json` ([portable config](../schemas/portable-config.md)). Reads version targets, extensions, changelog, etc. from the file. CLI flags override `homeboy.json` values.
+- `--json <spec>`: JSON input spec for create/update (supports single or bulk)
+- `--skip-existing`: skip items that already exist (JSON mode only)
+- `--local-path <path>`: absolute path to local **source / git checkout** directory (required unless `--from-repo`; ID derived from directory name; `~` is expanded). Must be a git repo — not the production deploy target (see [component schema](../schemas/component-schema.md#local_path-vs-remote_path))
+- `--remote-path <path>`: remote path relative to project `base_path` (required unless in `homeboy.json`)
+- `--build-artifact <path>`: build artifact path relative to `local_path` (required; must include a filename)
+- `--version-target <TARGET>`: version target in format `file` or `file::pattern` (repeatable)
+- `--build-command <command>`: build command to run in `local_path` (required for `homeboy build`)
+- `--extract-command <command>`: command to run after upload (optional; supports `{artifact}` and `{targetDir}`)
+
+#### Extract Command Execution Context
+
+The `extract_command` runs **inside the target directory**. During deploy, Homeboy:
+1. Creates the target directory (`remote_path` joined to project `base_path`)
+2. Uploads the artifact into that directory
+3. cd's into the target directory
+4. Executes your `extract_command`
+
+**Template variables:**
+- `{artifact}` - The uploaded artifact filename (not a path, just the filename)
+- `{targetDir}` - The full target directory path
+
+**Important:** Since the command runs inside the target directory, your extract logic must account for where files end up relative to the current directory. The agent configuring the component must understand the build output structure to write a correct extract_command.
+
+### `show`
+
+```sh
+homeboy component show <id>
+```
+
+### `set`
+
+```sh
+homeboy component set <id> --json <JSON>
+homeboy component set <id> '<JSON>'
+homeboy component set --json <JSON>   # id may be provided in JSON body
+homeboy component set <id> --key value   # dynamic flags
+homeboy component set <id> --json '{}' -- --key value   # combining --json with dynamic flags
+```
+
+Updates a component by merging a JSON object into `components/<id>.json`.
+
+Options:
+
+- `--json <JSON>`: JSON object to merge into config (supports `@file` and `-` for stdin)
+- `--replace <field>`: replace array fields instead of union (repeatable)
+- `--key value`: Dynamic flags that map directly to JSON keys (e.g., `--changelog-target "CHANGELOG.md"`)
+
+**Important:** When combining `--json` with dynamic flags, you must add an explicit `--` separator before the dynamic flags:
+
+```sh
+# Correct: explicit separator before dynamic flags
+homeboy component set my-plugin --json '{"type":"plugin"}' -- --build_command "npm run build"
+
+# Incorrect: will fail with "unexpected argument"
+homeboy component set my-plugin --json '{"type":"plugin"}' --build_command "npm run build"
+```
+
+Notes:
+
+- If the JSON contains an `id` field that differs from `<id>`, the component is automatically renamed first (equivalent to calling `rename`), then the remaining fields are merged. Project references are updated automatically.
+- Use `null` in JSON to clear a field (for example, `{"post_version_bump_commands": null}`).
+
+#### Release configuration
+
+Components may define a `release` block for component-scoped release planning. You can set it with:
+
+```sh
+homeboy component set <id> --json '{"release": {"enabled": true, "steps": []}}'
+```
+
+Components also define extension usage via `extensions`:
+
+```sh
+homeboy component set <id> --json '{"extensions": {"github": {"settings": {}}, "rust": {"settings": {}}}}'
+```
+
+```json
+{
+  "release": {
+    "enabled": true,
+    "steps": [
+      { "id": "build", "type": "build", "label": "Build", "needs": [], "config": {} }
+    ],
+    "settings": { "distTarget": "homeboy" }
+  }
+}
+```
+
+#### Setting changelog_target
+
+To configure changelog tracking for a component:
+
+```sh
+# Using dynamic flag (recommended)
+homeboy component set <id> --changelog-target "CHANGELOG.md"
+homeboy component set <id> --changelog-target "docs/CHANGELOG.md"
+
+# Using JSON format
+homeboy component set <id> '{"changelog_target": "docs/CHANGELOG.md"}'
+```
+
+Note: `changelog_target` is a string path relative to `local_path`, not an object.
+
+### `delete`
+
+```sh
+homeboy component delete <id>
+```
+
+Deletion is safety-checked:
+
+- If the component is referenced by one or more projects, the command errors and asks you to remove it from those projects first.
+
+### `rename`
+
+```sh
+homeboy component rename <id> <new-id>
+```
+
+Renames a component by changing its ID and rewriting any project files that reference the old ID.
+
+Notes:
+
+- `new-id` is lowercased before writing.
+- The component is moved from `components/<old-id>.json` to `components/<new-id>.json`.
+- Project references are updated by rewriting each project config that uses the component.
+
+Example:
+
+```sh
+homeboy component rename extra-chill-api extrachill-api
+```
+
+### `list`
+
+```sh
+homeboy component list
+```
+
+### `projects`
+
+```sh
+homeboy component projects <id>
+```
+
+Lists all projects that reference the given component. Returns both project IDs and full project objects.
+
+### `shared`
+
+```sh
+homeboy component shared [id]
+```
+
+Shows which components are shared across projects.
+
+Without an ID, returns a map of all components and the projects using them:
+
+```sh
+homeboy component shared
+# → my-plugin: [site-a, site-b, site-c]
+# → homeboy: [project-1, project-2]
+```
+
+With an ID, shows only projects using that specific component:
+
+```sh
+homeboy component shared my-plugin
+# → [site-a, site-b, site-c]
+```
+
+This is useful for:
+- Understanding component distribution across your projects
+- Planning coordinated deployments with `deploy --shared`
+- Identifying candidates for fleet grouping
+
+## JSON output
+
+> Note: all command output is wrapped in the global JSON envelope described in the [JSON output contract](../architecture/output-system.md). The object below is the `data` payload.
+
+`homeboy component` returns a `ComponentOutput` object.
+
+```json
+{
+  "command": "component.create|component.show|component.set|component.delete|component.rename|component.list|component.projects",
+  "component_id": "<id>|null",
+  "success": true,
+  "updated_fields": ["local_path", "remote_path"],
+  "component": {},
+  "components": [],
+  "import": null,
+  "project_ids": ["project-1", "project-2"],
+  "projects": []
+}
+```
+
+Notes:
+
+- In JSON import mode (`homeboy component create --json ...`), `command` is still `component.create` and `import` is populated.
+- `updated_fields` is empty for all actions except `set`/`rename`.
+- `rename` does not include the old ID; capture it from your input if needed.
+- `project_ids` and `projects` are only populated for `component.projects`.
+
+
+## Related
+
+- [build](build.md)
+- [deploy](deploy.md)
+- [fleet](fleet.md)
+- [project](project.md)
+- [JSON output contract](../architecture/output-system.md)
